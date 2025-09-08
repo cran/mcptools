@@ -1,3 +1,7 @@
+# mcptools 0.1.1
+
+Addressed an issue in tests on `r-devel-linux-x86_64-fedora-clang`.
+
 # mcptools 0.1.0
 
 Initial CRAN submission.

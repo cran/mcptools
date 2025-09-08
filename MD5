@@ -1,7 +1,7 @@
-f378ac37299b1edcafc8776440975336 *DESCRIPTION
+ad8ba70ed7a4eb6ff984a1f7843ea7f5 *DESCRIPTION
 0d37e729582c25a6fc726cf9f8763140 *LICENSE
 f84b0277b5101573bb9b2ff129b8f500 *NAMESPACE
-73c4c038fe8fc2085ee3514fc6d3d7d7 *NEWS.md
+c2e6b219389e961d804e37aab4128161 *NEWS.md
 195792b8a44dcbb2744ca93e3481699b *R/aaa.R
 d331b9c54cfe36c3a6d63e3e27a627fe *R/client.R
 de19f78784f922f218430613b27f15ca *R/mcptools-package.R
@@ -9,7 +9,7 @@ cd6ad31785e4c857673ae92885a4e01a *R/server.R
 de6c7d3c1d15b7381130d07aab0386d1 *R/session.R
 4a835c252e3a41793dc79ed948a443d0 *R/tools.R
 546cbfedb610c11a9b9321ad47b9672c *R/utils.R
-bb44ff97116a1909a00148488c970769 *README.md
+dc9d1293013cb274b35bdade1fc5f6f8 *README.md
 61d3c96cf664ff657ef8f5502cce1de9 *build/vignette.rds
 746a0cbf1f7903bd7bbf1d9f0dc2fd2d *inst/doc/server.R
 cf76ec3f61814a6d41bbd2bbdaea575f *inst/doc/server.Rmd
@@ -20,7 +20,7 @@ a8bd0b19d0d2e940e10dc0ae1a4940df *man/client.Rd
 4e201dfb197c32763f643b22d7ccf23c *man/figures/logo.png
 bdb0b37e62152c541445e73f94ecce3b *man/figures/r_as_a_client.png
 a5d407a766e03dfe8c676e85c0b3f251 *man/figures/r_as_a_server.png
-a8790ce489fcfb242311a339eaf32591 *man/mcptools-package.Rd
+693559ec67b7b4ae45416bc2a3b093f6 *man/mcptools-package.Rd
 228fafc5582426f9f2d74406401b8e3d *man/server.Rd
 298d28140356e1aad11b25adeb7a90e5 *tests/testthat.R
 89c10cb7b0fc101fe580c04b444d39d9 *tests/testthat/_snaps/client.md
