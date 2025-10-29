@@ -1,14 +1,6 @@
 #' @rdname server
 #' @export
 mcp_session <- function() {
-  # HACK: If a session is already available from another session via `.Rprofile`,
-  # `mcp_session()` will be called again when the client runs the command
-  # Rscript -e "mcptools::mcp_server()" and the existing session connection
-  # will be wiped. Returning early in this case allows for the desired R
-  # session to be running already before the client initiates the server.
-  if (!interactive()) {
-    return(invisible())
-  }
 
   the$session_socket <- nanonext::socket("poly")
   i <- 1L
@@ -23,8 +15,9 @@ mcp_session <- function() {
     i <- i + 1L
   }
   the$session <- i
-
   schedule_handle_message_from_server()
+
+  invisible(the$session_socket)
 }
 
 handle_message_from_server <- function(data) {
@@ -62,18 +55,20 @@ handle_message_from_server <- function(data) {
 
 as_tool_call_result <- function(data, result) {
   is_error <- FALSE
+  format_result <- function(x) paste(x, collapse = "\n")
+  
   if (inherits(result, "ellmer::ContentToolResult")) {
     is_error <- !is.null(result@error)
-    result <- result@value %||% result@error
+    format_result <- asNamespace("ellmer")[["tool_string"]] %||% format_result
   }
-
+  
   jsonrpc_response(
     data$id,
     list(
       content = list(
         list(
           type = "text",
-          text = paste(result, collapse = "\n")
+          text = format_result(result)
         )
       ),
       isError = is_error
@@ -94,7 +89,12 @@ schedule_handle_message_from_server <- function() {
 
 # Given a vector or list, drop all the NULL items in it
 drop_nulls <- function(x) {
-  x[!vapply(x, is.null, FUN.VALUE = logical(1))]
+  is_null <- vapply(x, is.null, FUN.VALUE = logical(1))
+  keep_id <- rep(FALSE, length(x))
+  if (!is.null(names(x))) {
+    keep_id <- names(x) == "id"
+  }
+  x[!is_null | keep_id]
 }
 
 # Enough information for the user to be able to identify which

@@ -66,6 +66,38 @@ the$mcp_servers <- list()
 #' }
 #' ```
 #'
+#' @section Connecting to remote (http) servers:
+#' `mcp_tools()`, which supports using R as an MCP _client_ via ellmer, only
+#' implements the local (stdio) protocol. However, some MCP _servers_ only
+#' implement the http protocol.
+#'
+#' In that case, we recommend using
+#' [mcp-remote](https://www.npmjs.com/package/mcp-remote), a local (stdio)
+#' MCP server that supports connecting to remote (http) servers using the
+#' stdio protocol, with fully-featured authentication. In other words,
+#' `mcp-remote` converts remote MCP servers to mcptools-compatible local ones.
+#'
+#' To connect to remote (http) MCP servers when using ellmer as a client, use
+#' the command `npx` with the args `mcp-remote` and the URL provided by the
+#' remote server. For example, you might write:
+#'
+#' ```
+#' {
+#'   "mcpServers": {
+#'     "remote-example": {
+#'       "command": "npx",
+#'       "args": [
+#'         "mcp-remote",
+#'         "https://remote.mcp.server/sse"
+#'       ]
+#'     }
+#'   }
+#' }
+#' ```
+#'
+#' mcp-remote's [homepage](https://www.npmjs.com/package/mcp-remote) has many
+#' examples for various authentication schemes.
+#'
 #' @returns
 #' * `mcp_tools()` returns a list of ellmer tools that can be passed directly
 #' to the `$set_tools()` method of an [ellmer::Chat] object. If the file at
@@ -100,30 +132,8 @@ mcp_tools <- function(config = NULL) {
   for (i in seq_along(config)) {
     config_i <- config[[i]]
     name_i <- names(config)[i]
-    config_i_env <- if ("env" %in% names(config_i)) {
-      unlist(config_i$env)
-    } else {
-      NULL
-    }
 
-    process <- processx::process$new(
-      # seems like the R process has a different PATH than process_exec
-      command = Sys.which(config_i$command),
-      args = config_i$args,
-      env = config_i_env,
-      stdin = "|",
-      stdout = "|",
-      stderr = "|"
-    )
-
-    the$server_processes <- c(
-      the$server_processes,
-      list2(
-        !!paste0(c(config_i$command, config_i$args), collapse = " ") := process
-      )
-    )
-
-    add_mcp_server(process = process, name = name_i)
+    add_mcp_server(config = config_i, name = name_i)
   }
 
   servers_as_ellmer_tools()
@@ -181,24 +191,75 @@ read_mcp_config <- function(config, call = caller_env()) {
   config$mcpServers
 }
 
-
 error_no_mcp_config <- function(call) {
   cli::cli_abort(
     c(
       "The mcptools MCP client configuration file does not exist.",
-      i = "Supply a non-NULL file {.arg config} or create a file at the default 
+      i = "Supply a non-NULL file {.arg config} or create a file at the default
            configuration location {.file {default_mcp_client_config()}}."
     ),
     call = call
   )
 }
 
-add_mcp_server <- function(process, name) {
-  response_initialize <- send_and_receive(process, mcp_request_initialize())
-  response_tools_list <- send_and_receive(process, mcp_request_tools_list())
+add_mcp_server <- function(config, name, call = caller_env()) {
+  config_env <- if ("env" %in% names(config)) {
+    unlist(config$env)
+  } else {
+    NULL
+  }
+
+  process <- processx::process$new(
+    command = Sys.which(config$command),
+    args = config$args %||% character(),
+    env = config_env,
+    stdin = "|",
+    stdout = "|",
+    stderr = "|"
+  )
+
+  the$server_processes <- c(
+    the$server_processes,
+    list2(
+      !!paste0(
+        c(config$command, config$args %||% ""),
+        collapse = " "
+      ) := process
+    )
+  )
+
+  # Fail gracefully if the process failed on startup (#82)
+  tryCatch(
+    {
+      response_initialize <- send_and_receive(
+        process,
+        mcp_request_initialize()
+      )
+
+      send_and_receive(process, mcp_request_initialized())
+      response_tools_list <- send_and_receive(
+        process,
+        mcp_request_tools_list()
+      )
+    },
+    error = function(e) {
+      if (process$get_exit_status() %in% c(1L, 2L)) {
+        cli::cli_abort(
+          c(
+            "The command {.code {config$command}} failed with the following error:",
+            "x" = "{paste0(process$read_all_error_lines(), collapse = '. ')}"
+          ),
+          call = call
+        )
+      }
+
+      cnd_signal(e)
+    }
+  )
 
   the$mcp_servers[[name]] <- list(
     name = name,
+    type = "stdio",
     process = process,
     tools = response_tools_list$result,
     id = 3
@@ -221,41 +282,21 @@ server_as_ellmer_tools <- function(server) {
   for (i in seq_along(tools)) {
     tool <- tools[[i]]
     tool_arguments <- as_ellmer_types(tool)
-    if (is_new_ellmer()) {
-      tools_out[[i]] <-
-        do.call(
-          ellmer::tool,
-          c(
-            list(
-              fun = tool_ref(
-                server = server$name,
-                tool = tool$name,
-                arguments = names(tool_arguments)
-              ),
-              description = tool$description,
-              arguments = tool_arguments,
-              name = tool$name
-            )
-          )
+    tools_out[[i]] <- do.call(
+      ellmer::tool,
+      c(
+        list(
+          fun = tool_ref(
+            server = server$name,
+            tool = tool$name,
+            arguments = names(tool_arguments)
+          ),
+          description = tool$description,
+          arguments = tool_arguments,
+          name = tool$name
         )
-    } else {
-      tools_out[[i]] <-
-        do.call(
-          ellmer::tool,
-          c(
-            list(
-              .fun = tool_ref(
-                server = server$name,
-                tool = tool$name,
-                arguments = names(tool_arguments)
-              ),
-              .description = tool$description,
-              .name = tool$name
-            ),
-            tool_arguments
-          )
-        )
-    }
+      )
+    )
   }
 
   tools_out
@@ -424,7 +465,7 @@ mcp_request_initialize <- function() {
     id = 1,
     method = "initialize",
     params = list(
-      protocolVersion = "2024-11-05",
+      protocolVersion = "2025-06-18",
       capabilities = list(
         tools = list(
           listChanged = FALSE
@@ -439,7 +480,13 @@ mcp_request_initialize <- function() {
 }
 
 # step 2: send initialized notification
-# This is a MAY in the protocol, so omitting.
+mcp_request_initialized <- function() {
+  list(
+    jsonrpc = "2.0",
+    method = "notifications/initialized"
+  )
+}
+
 
 # step 3: request the list of tools
 mcp_request_tools_list <- function() {

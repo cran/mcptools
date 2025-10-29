@@ -6,24 +6,53 @@
 \alias{mcp_session}
 \title{R as a server: Configure R-based tools with LLM-enabled apps}
 \usage{
-mcp_server(tools = NULL)
+mcp_server(
+  tools = NULL,
+  ...,
+  type = c("stdio", "http"),
+  host = "127.0.0.1",
+  port = as.integer(Sys.getenv("MCPTOOLS_PORT", "8080")),
+  session_tools = TRUE
+)
 
 mcp_session()
 }
 \arguments{
-\item{tools}{A list of tools created with \code{\link[ellmer:tool]{ellmer::tool()}} that will be
-available from the server or a file path to an .R file that, when sourced,
-will return a list of tools. Any list that could be passed to
-\code{Chat$set_tools()} can be passed here. By default, the package won't serve
-any tools other than those needed to communicate with interactive R sessions.}
+\item{tools}{Optional collection of tools to expose. Supply either a list
+of objects created by \code{\link[ellmer:tool]{ellmer::tool()}} or a path to an \code{.R} file that,
+when sourced, yields such a list. Defaults to \code{NULL}, which serves only
+the built-in session tools when \code{session_tools} is \code{TRUE}. Note that
+\strong{tools are associated with the \code{mcp_server()}} rather than with
+\code{mcp_session()}s; to determine what tools are available in a session,
+set the \code{tools} argument to \code{mcp_server()}.}
+
+\item{...}{Reserved for future use; currently ignored.}
+
+\item{type}{Transport type: \code{"stdio"} for standard input/output (default),
+or \code{"http"} for HTTP-based transport.}
+
+\item{host}{Host to bind to when using HTTP transport. Defaults to
+\code{"127.0.0.1"} (localhost) for security. Ignored for stdio transport.}
+
+\item{port}{Port to bind to when using HTTP transport. Defaults to the value
+of the \code{MCPTOOLS_PORT} environment variable, or 8080 if not set. Ignored
+for stdio transport.}
+
+\item{session_tools}{Logical value whether to include the built-in session
+tools (\code{list_r_sessions}, \code{select_r_session}) that work with
+\code{mcp_session()}. Defaults to \code{TRUE}. Note that the tools to interface with
+sessions are still first routed through the \code{mcp_server()}.}
 }
 \value{
-\code{mcp_server()} and \code{mcp_session()} are both called primarily for side-effects.
+\code{mcp_server()} and \code{mcp_session()} are both called primarily for their
+side-effects.
 \itemize{
 \item \code{mcp_server()} blocks the R process it's called in indefinitely and isn't
 intended for interactive use.
 \item \code{mcp_session()} makes the interactive R session it's called in available to
-MCP servers. It returns a promise via \code{\link[promises:promise]{promises::promise()}}.
+MCP servers. It returns invisibly the \pkg{nanonext} socket used for
+communicating with the server. Call \code{\link[=close]{close()}} on the socket to stop the
+session.
 }
 }
 \description{
@@ -33,8 +62,9 @@ interactive R session allows those tools to execute inside of that session.
 }
 \section{Configuration}{
 
+\subsection{Local server (default, via stdio)}{
 
-\code{\link[=mcp_server]{mcp_server()}} should be configured with the MCP clients via the \code{Rscript}
+\code{\link[=mcp_server]{mcp_server()}} can be configured with MCP clients via the \code{Rscript}
 command. For example, to use with Claude Desktop, paste the following in your
 Claude Desktop configuration (on macOS, at
 \code{file.edit("~/Library/Application Support/Claude/claude_desktop_config.json")}):
@@ -53,6 +83,20 @@ Or, to use with Claude Code, you might type in a terminal:
 
 \if{html}{\out{<div class="sourceCode bash">}}\preformatted{claude mcp add -s "user" r-mcptools Rscript -e "mcptools::mcp_server()"
 }\if{html}{\out{</div>}}
+}
+
+\subsection{Remote server (via http)}{
+
+To run an HTTP server instead, use \code{type = "http"}:
+
+\if{html}{\out{<div class="sourceCode r">}}\preformatted{# Start HTTP server on default port (8080)
+mcp_server(type = "http")
+
+# Or specify custom host and port
+mcp_server(type = "http", host = "127.0.0.1", port = 9000)
+}\if{html}{\out{</div>}}
+
+The server will listen for HTTP POST requests containing JSON-RPC messages.
 
 \strong{mcp_server() is not intended for interactive use.}
 
@@ -66,6 +110,7 @@ available to the server.
 On Windows, you may need to configure the full path to the Rscript executable.
 Examples for Claude Code on WSL and Claude Desktop on Windows are shown
 at \url{https://github.com/posit-dev/mcptools/issues/41#issuecomment-3036617046}.
+}
 }
 
 \examples{

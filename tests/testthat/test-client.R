@@ -1,3 +1,5 @@
+skip_if(is_fedora())
+
 test_that("mcp_tools works", {
   skip_if_not_installed("withr")
   skip_if(identical(Sys.getenv("GITHUB_PAT"), ""))
@@ -83,4 +85,23 @@ test_that("mcp_tools() returns mcpServers when valid", {
   writeLines(jsonlite::toJSON(config), tmp_file)
   result <- read_mcp_config(tmp_file)
   expect_equal(result, config$mcpServers)
+})
+
+test_that("mcp_tools() errors informatively when process exits", {
+  skip_on_cran()
+  skip_on_ci()
+
+  config <- list(
+    mcpServers = list(
+      "test" = list(
+        command = "Rscript",
+        args = c("-e", "stop('intentional error')")
+      )
+    )
+  )
+
+  tmpfile <- withr::local_tempfile(fileext = ".json")
+  jsonlite::write_json(config, tmpfile, auto_unbox = TRUE)
+
+  expect_snapshot(error = TRUE, mcp_tools(tmpfile))
 })

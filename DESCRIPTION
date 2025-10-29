@@ -1,6 +1,6 @@
 Package: mcptools
 Title: Model Context Protocol Servers and Clients
-Version: 0.1.1
+Version: 0.2.0
 Authors@R: c(
     person("Simon", "Couch", , "simon.couch@posit.co", role = c("aut", "cre"),
            comment = c(ORCID = "0000-0001-5676-5107")),
@@ -23,20 +23,20 @@ URL: https://github.com/posit-dev/mcptools,
         https://posit-dev.github.io/mcptools/
 BugReports: https://github.com/posit-dev/mcptools/issues
 Depends: R (>= 4.1.0)
-Imports: cli, ellmer (>= 0.2.0), jsonlite, nanonext (>= 1.6.0),
-        processx, promises, rlang
+Imports: cli, ellmer (>= 0.3.0), httpuv, httr2, jsonlite, nanonext (>=
+        1.6.0), processx, promises, rlang
 Suggests: knitr, rmarkdown, testthat (>= 3.0.0), withr
 VignetteBuilder: knitr
 Config/Needs/website: tidyverse/tidytemplate
 Config/testthat/edition: 3
 Encoding: UTF-8
-RoxygenNote: 7.3.2
+RoxygenNote: 7.3.3
 NeedsCompilation: no
-Packaged: 2025-09-08 14:21:58 UTC; simoncouch
+Packaged: 2025-10-29 20:14:01 UTC; simoncouch
 Author: Simon Couch [aut, cre] (ORCID: <https://orcid.org/0000-0001-5676-5107>),
   Winston Chang [aut] (ORCID: <https://orcid.org/0000-0002-1576-2126>),
   Charlie Gao [aut] (ORCID: <https://orcid.org/0000-0002-0750-061X>),
   Posit Software, PBC [cph, fnd] (ROR: <https://ror.org/03wc8by49>)
 Maintainer: Simon Couch <simon.couch@posit.co>
 Repository: CRAN
-Date/Publication: 2025-09-08 15:40:02 UTC
+Date/Publication: 2025-10-29 20:30:02 UTC

@@ -1,3 +1,5 @@
+skip_if(is_fedora())
+
 test_that("mcp_session returns early when not interactive", {
   local_mocked_bindings(interactive = function() FALSE)
   expect_invisible(mcp_session())
@@ -5,7 +7,7 @@ test_that("mcp_session returns early when not interactive", {
 
 test_that("mcp_session initializes appropriate globals", {
   local_mocked_bindings(interactive = function() TRUE)
-  mcp_session()
+  expect_s3_class(mcp_session(), "nanoSocket")
   expect_s3_class(the$session_socket, "nanoSocket")
   expect_type(the$session, "integer")
 })
@@ -41,7 +43,7 @@ test_that("as_tool_call_result handles ContentToolResult with error", {
 
   output <- as_tool_call_result(data, tool_result)
 
-  expect_equal(output$result$content[[1]]$text, "error message")
+  expect_match(output$result$content[[1]]$text, "error message")
   expect_true(output$result$isError)
 })
 
