@@ -1,3 +1,10 @@
+# mcptools 0.2.1
+
+* `mcp_server()` now ensures that `inputSchema` always includes a `properties`
+  field, even for tools with no arguments (#91 by @itkonen).
+
+* `mcp_server()` now negotiates the protocol version with clients, supporting versions 2024-11-05 through 2025-11-25 (#92 by @itkonen).
+
 # mcptools 0.2.0
 
 ## Server

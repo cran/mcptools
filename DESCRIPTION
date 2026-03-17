@@ -1,6 +1,6 @@
 Package: mcptools
 Title: Model Context Protocol Servers and Clients
-Version: 0.2.0
+Version: 0.2.1
 Authors@R: c(
     person("Simon", "Couch", , "simon.couch@posit.co", role = c("aut", "cre"),
            comment = c(ORCID = "0000-0001-5676-5107")),
@@ -32,11 +32,11 @@ Config/testthat/edition: 3
 Encoding: UTF-8
 RoxygenNote: 7.3.3
 NeedsCompilation: no
-Packaged: 2025-10-29 20:14:01 UTC; simoncouch
+Packaged: 2026-03-16 14:31:08 UTC; simoncouch
 Author: Simon Couch [aut, cre] (ORCID: <https://orcid.org/0000-0001-5676-5107>),
   Winston Chang [aut] (ORCID: <https://orcid.org/0000-0002-1576-2126>),
   Charlie Gao [aut] (ORCID: <https://orcid.org/0000-0002-0750-061X>),
   Posit Software, PBC [cph, fnd] (ROR: <https://ror.org/03wc8by49>)
 Maintainer: Simon Couch <simon.couch@posit.co>
 Repository: CRAN
-Date/Publication: 2025-10-29 20:30:02 UTC
+Date/Publication: 2026-03-17 08:30:22 UTC

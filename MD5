@@ -1,11 +1,12 @@
-87c5eb360977480153b32e689c595d99 *DESCRIPTION
+a6673d5bfbec2cbf79e9289450293c24 *DESCRIPTION
 0d37e729582c25a6fc726cf9f8763140 *LICENSE
 f723bbd65f23a281d351b293866601f8 *NAMESPACE
-bfa770b0e379dd52c470f8068c5d215b *NEWS.md
+4885fbe86189d7bc27de257acf0d7885 *NEWS.md
 d07726bc91bf7d913021bdf3bfe20b20 *R/aaa.R
 8b42c799aa50a8d4b180ae833dab33bf *R/client.R
 f9b50df86f46789c25fa7e3e6fd1af23 *R/mcptools-package.R
-90d73a97fa103a1f3546d57864f6b243 *R/server.R
+94afb89b47500c46e044493ccb450e5f *R/protocol-version.R
+7229f9149ca42158a8c30a5486647021 *R/server.R
 1c9522db4cd029121283bb16dba129e8 *R/session.R
 8c1e47e3af6d49df790520f4aaa8fc61 *R/tools.R
 b3b7a24c8c28e933e6368702d077cf6d *R/utils.R
@@ -30,6 +31,7 @@ a5d407a766e03dfe8c676e85c0b3f251 *man/figures/r_as_a_server.png
 5f3d0f697c1aee5c2da25888b133ff8b *tests/testthat/_snaps/utils.md
 739bb632791ae5616243423f43c94e88 *tests/testthat/helper.R
 f5d51be7c3e545240c552715cbb31cf8 *tests/testthat/test-client.R
+a75ede7bdc3ee85ca13dbd67352c1559 *tests/testthat/test-protocol-version.R
 3fbc66cd71722d169650835e77a3c2b8 *tests/testthat/test-server.R
 238d5b61ff7aca61920fce6fb8675e90 *tests/testthat/test-session.R
 5a7017aaff00fbe422a0e5a4dfd80185 *tests/testthat/test-tools.R
