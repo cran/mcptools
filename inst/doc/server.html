@@ -395,6 +395,39 @@ to access variables in interactive R sessions, add
 perhaps by first calling <code>usethis::edit_r_profile()</code>.</p>
 <p>Then, you’re good to go!</p>
 </div>
+<div id="posit-connect" class="section level2">
+<h2>Posit Connect</h2>
+<p>mcptools can also be deployed to Posit Connect as an HTTP MCP server.
+In the project directory, add a <code>_server.yml</code> file:</p>
+<div class="sourceCode" id="cb2"><pre class="sourceCode yaml"><code class="sourceCode yaml"><span id="cb2-1"><a href="#cb2-1" tabindex="-1"></a><span class="fu">engine</span><span class="kw">:</span><span class="at"> mcptools</span></span>
+<span id="cb2-2"><a href="#cb2-2" tabindex="-1"></a><span class="fu">tools</span><span class="kw">:</span><span class="at"> tools.R</span></span></code></pre></div>
+<p>Then add <code>tools.R</code> with the tools to expose. The file
+should return a list of <code>ellmer::tool()</code> objects:</p>
+<div class="sourceCode" id="cb3"><pre class="sourceCode r"><code class="sourceCode r"><span id="cb3-1"><a href="#cb3-1" tabindex="-1"></a><span class="fu">list</span>(</span>
+<span id="cb3-2"><a href="#cb3-2" tabindex="-1"></a>  <span class="at">tool_rnorm =</span> ellmer<span class="sc">::</span><span class="fu">tool</span>(</span>
+<span id="cb3-3"><a href="#cb3-3" tabindex="-1"></a>    <span class="at">fun =</span> rnorm,</span>
+<span id="cb3-4"><a href="#cb3-4" tabindex="-1"></a>    <span class="at">description =</span> <span class="st">&quot;Draw numbers from a random normal distribution.&quot;</span>,</span>
+<span id="cb3-5"><a href="#cb3-5" tabindex="-1"></a>    <span class="at">arguments =</span> <span class="fu">list</span>(</span>
+<span id="cb3-6"><a href="#cb3-6" tabindex="-1"></a>      <span class="at">n =</span> ellmer<span class="sc">::</span><span class="fu">type_integer</span>(<span class="st">&quot;The number of observations.&quot;</span>),</span>
+<span id="cb3-7"><a href="#cb3-7" tabindex="-1"></a>      <span class="at">mean =</span> ellmer<span class="sc">::</span><span class="fu">type_number</span>(<span class="st">&quot;The mean of the distribution.&quot;</span>),</span>
+<span id="cb3-8"><a href="#cb3-8" tabindex="-1"></a>      <span class="at">sd =</span> ellmer<span class="sc">::</span><span class="fu">type_number</span>(<span class="st">&quot;The standard deviation.&quot;</span>)</span>
+<span id="cb3-9"><a href="#cb3-9" tabindex="-1"></a>    )</span>
+<span id="cb3-10"><a href="#cb3-10" tabindex="-1"></a>  )</span>
+<span id="cb3-11"><a href="#cb3-11" tabindex="-1"></a>)</span></code></pre></div>
+<p>Deploy the directory as an R API and mark it as MCP content:</p>
+<div class="sourceCode" id="cb4"><pre class="sourceCode r"><code class="sourceCode r"><span id="cb4-1"><a href="#cb4-1" tabindex="-1"></a>rsconnect<span class="sc">::</span><span class="fu">deployAPI</span>(<span class="st">&quot;.&quot;</span>, <span class="at">contentCategory =</span> <span class="st">&quot;mcp&quot;</span>)</span></code></pre></div>
+<p>If the content URL is
+<code>https://connect.example.com/content/abc123/</code>, use
+<code>https://connect.example.com/content/abc123/mcp</code> as the MCP
+endpoint. mcptools accepts requests at any path, so the content URL
+itself also works.</p>
+<p>If you cannot set <code>contentCategory = &quot;mcp&quot;</code> during
+deployment, set the MCP category in Connect after deploying and set
+minimum processes to at least 1.</p>
+<p>Connect deployments run tools inside the deployed R process by
+default. Session discovery is intended for local desktop R sessions and
+is disabled by default on Connect.</p>
+</div>
 <div id="multiple-clients-and-r-sessions" class="section level2">
 <h2>Multiple clients and R sessions</h2>
 <p>While a single client (and potentially a single R session) probably

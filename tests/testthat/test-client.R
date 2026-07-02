@@ -87,6 +87,229 @@ test_that("mcp_tools() returns mcpServers when valid", {
   expect_equal(result, config$mcpServers)
 })
 
+test_that("mcp_tools() inherits an allowlisted environment", {
+  withr::local_envvar(
+    R_LIBS_USER = "r-library",
+    GITHUB_PAT = "secret"
+  )
+
+  env <- mcp_server_env(list())
+
+  expect_identical(env[["R_LIBS_USER"]], "r-library")
+  expect_false("GITHUB_PAT" %in% names(env))
+})
+
+test_that("mcp_tools() overlays configured env on inherited env", {
+  withr::local_envvar(PATH = "inherited-path")
+  config <- list(env = list(
+    PATH = "configured-path",
+    MCPTOOLS_TEST_ENVVAR = "value"
+  ))
+
+  env <- mcp_server_env(config)
+
+  expect_identical(env[["PATH"]], "configured-path")
+  expect_identical(env[["MCPTOOLS_TEST_ENVVAR"]], "value")
+})
+
+test_that("mcp_tools() skips inherited bash functions", {
+  withr::local_envvar(R_PROFILE = "() { :; }; echo vulnerable")
+
+  env <- mcp_server_env(list())
+
+  expect_false("R_PROFILE" %in% names(env))
+})
+
+test_that("mcp_tool_result_as_ellmer handles text content", {
+  response <- list(
+    result = list(
+      content = list(list(type = "text", text = "hello")),
+      isError = FALSE
+    )
+  )
+
+  expect_equal(mcp_tool_result_as_ellmer(response), "hello")
+})
+
+test_that("mcp_tool_result_as_ellmer handles image content", {
+  response <- list(
+    result = list(
+      content = list(list(
+        type = "image",
+        data = "abc123",
+        mimeType = "image/png"
+      )),
+      isError = FALSE
+    )
+  )
+
+  result <- mcp_tool_result_as_ellmer(response)
+
+  expect_s3_class(result, "ellmer::ContentImageInline")
+  expect_equal(result@data, "abc123")
+  expect_equal(result@type, "image/png")
+})
+
+test_that("mcp_tool_result_as_ellmer handles mixed content", {
+  response <- list(
+    result = list(
+      content = list(
+        list(type = "text", text = "caption"),
+        list(type = "image", data = "abc123", mimeType = "image/png")
+      ),
+      isError = FALSE
+    )
+  )
+
+  result <- mcp_tool_result_as_ellmer(response)
+
+  expect_length(result, 2)
+  expect_s3_class(result[[1]], "ellmer::ContentText")
+  expect_s3_class(result[[2]], "ellmer::ContentImageInline")
+})
+
+test_that("mixed MCP content expands in ellmer tool result turns", {
+  response <- list(
+    result = list(
+      content = list(
+        list(type = "text", text = "caption"),
+        list(type = "image", data = "abc123", mimeType = "image/png")
+      ),
+      isError = FALSE
+    )
+  )
+  request <- ellmer::ContentToolRequest(
+    id = "call_1",
+    name = "get_reference_image",
+    arguments = list()
+  )
+
+  result <- ellmer:::new_tool_result(request, mcp_tool_result_as_ellmer(response))
+  turn <- ellmer:::user_turn(result)
+  turn <- ellmer:::turn_contents_expand(turn)
+
+  expect_s3_class(turn@contents[[1]], "ellmer::ContentToolResult")
+  expect_s3_class(turn@contents[[2]], "ellmer::ContentText")
+  expect_s3_class(turn@contents[[3]], "ellmer::ContentText")
+  expect_s3_class(turn@contents[[4]], "ellmer::ContentText")
+  expect_equal(turn@contents[[4]]@text, "caption")
+  expect_s3_class(turn@contents[[7]], "ellmer::ContentImageInline")
+  expect_s3_class(turn@contents[[9]], "ellmer::ContentText")
+})
+
+test_that("MCP image content serializes as image content in ellmer", {
+  response <- list(
+    result = list(
+      content = list(list(
+        type = "image",
+        data = "abc123",
+        mimeType = "image/png"
+      )),
+      isError = FALSE
+    )
+  )
+  request <- ellmer::ContentToolRequest(
+    id = "call_1",
+    name = "get_reference_image",
+    arguments = list()
+  )
+
+  result <- ellmer:::new_tool_result(request, mcp_tool_result_as_ellmer(response))
+  turn <- ellmer:::user_turn(result)
+  provider <- ellmer::chat_openai(model = "gpt-4.1-mini-2025-04-14")$get_provider()
+  json <- ellmer:::as_json(provider, turn)
+  json <- to_json(json)
+
+  expect_match(json, "input_image", fixed = TRUE)
+  expect_match(json, "data:image/png;base64,abc123", fixed = TRUE)
+})
+
+test_that("OpenAI can inspect an MCP image tool result", {
+  skip_on_cran()
+  skip_if(identical(Sys.getenv("OPENAI_API_KEY"), ""))
+
+  image_path <- tempfile(pattern = "reference-image-", fileext = ".jpg")
+  stopifnot(!grepl("cat", basename(image_path), ignore.case = TRUE))
+  download.file(
+    "https://upload.wikimedia.org/wikipedia/commons/3/3a/Cat03.jpg",
+    image_path,
+    mode = "wb",
+    quiet = TRUE
+  )
+
+  tool_file <- withr::local_tempfile(fileext = ".R")
+  writeLines(
+    c(
+      "list(",
+      "  get_reference_image = ellmer::tool(",
+      sprintf(
+        "    fun = function() ellmer::content_image_file(%s),",
+        shQuote(image_path)
+      ),
+      "    name = 'get_reference_image',",
+      "    description = 'Return the reference image as inline image content.',",
+      "    arguments = list()",
+      "  )",
+      ")"
+    ),
+    tool_file
+  )
+
+  # Load the package cwd-independently: under `devtools::test()` mcptools is a
+  # dev package (load its source), under `R CMD check` it's installed.
+  pkg_path <- find.package("mcptools")
+  load_expr <- if (file.exists(file.path(pkg_path, "Meta", "package.rds"))) {
+    "library(mcptools)"
+  } else {
+    sprintf("pkgload::load_all(%s, quiet = TRUE)", shQuote(pkg_path))
+  }
+  server_expr <- sprintf(
+    "%s; mcptools::mcp_server(tools = %s, session_tools = FALSE)",
+    load_expr,
+    shQuote(tool_file)
+  )
+  config_file <- withr::local_tempfile(fileext = ".json")
+  jsonlite::write_json(
+    list(
+      mcpServers = list(
+        image_demo = list(
+          command = rscript_binary(),
+          args = c("-e", server_expr)
+        )
+      )
+    ),
+    config_file,
+    auto_unbox = TRUE
+  )
+
+  tools <- mcp_tools(config_file)
+  server_process <- tail(the$server_processes, 1)[[1]]
+  withr::defer(server_process$kill())
+
+  chat <- ellmer::chat_openai(model = "gpt-4.1-mini-2025-04-14", echo = "none")
+  chat$set_tools(tools)
+  reply <- chat$chat(
+    "Call the get_reference_image tool, inspect the image it returns, and name the animal shown.",
+    echo = "none"
+  )
+
+  expect_true(grepl("cat", reply, ignore.case = TRUE))
+})
+
+test_that("mcp_tool_result_as_ellmer handles tool errors", {
+  response <- list(
+    result = list(
+      content = list(list(type = "text", text = "bad input")),
+      isError = TRUE
+    )
+  )
+
+  result <- mcp_tool_result_as_ellmer(response)
+
+  expect_s3_class(result, "ellmer::ContentToolResult")
+  expect_equal(result@error, "bad input")
+})
+
 test_that("mcp_tools() errors informatively when process exits", {
   skip_on_cran()
   skip_on_ci()
@@ -94,8 +317,12 @@ test_that("mcp_tools() errors informatively when process exits", {
   config <- list(
     mcpServers = list(
       "test" = list(
-        command = "Rscript",
-        args = c("-e", "stop('intentional error')")
+        # Use the full Rscript path: under R CMD check a bare "Rscript" resolves
+        # to the `R_check_bin` shim, which refuses to run and writes to stdout,
+        # leaving stderr (and thus the reported error) empty. `--vanilla` keeps
+        # the child's stderr deterministic regardless of the user's `.Rprofile`.
+        command = rscript_binary(),
+        args = c("--vanilla", "-e", "stop('intentional error')")
       )
     )
   )
@@ -103,5 +330,9 @@ test_that("mcp_tools() errors informatively when process exits", {
   tmpfile <- withr::local_tempfile(fileext = ".json")
   jsonlite::write_json(config, tmpfile, auto_unbox = TRUE)
 
-  expect_snapshot(error = TRUE, mcp_tools(tmpfile))
+  expect_snapshot(
+    error = TRUE,
+    mcp_tools(tmpfile),
+    transform = function(x) gsub(rscript_binary(), "Rscript", x, fixed = TRUE)
+  )
 })

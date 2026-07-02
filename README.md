@@ -39,14 +39,6 @@ Register third-party MCP servers with
 context into e.g. [shinychat](https://github.com/posit-dev/shinychat)
 and [querychat](https://posit-dev.github.io/querychat/) apps.
 
-> NOTE:
->
-> This package used to be called acquaint and supplied a default set of
-> tools from [btw](https://github.com/posit-dev/btw) when R was used as
-> an MCP server. The direction of the dependency has been reversed; to
-> use the same functionality from before, transition
-> `acquaint::mcp_server()` to `btw::btw_mcp_server()` and
-> `acquaint::mcp_session()` to `btw::btw_mcp_session()`.
 
 ## Installation
 
@@ -91,6 +83,27 @@ call `mcptools::mcp_session()` in those sessions. (You might include a
 call to this function in your .Rprofile, perhaps using
 `usethis::edit_r_profile()`, to automatically register every session you
 start up.)
+
+To deploy an HTTP MCP server to Posit Connect, add a `_server.yml` file
+with `engine: mcptools` and a `tools` file:
+
+``` yaml
+engine: mcptools
+tools: tools.R
+```
+
+Deploy the directory as an R API and mark it as MCP content:
+
+``` r
+rsconnect::deployAPI(".", contentCategory = "mcp")
+```
+
+If the content URL is `https://connect.example.com/content/abc123/`, use
+`https://connect.example.com/content/abc123/mcp` as the MCP endpoint.
+
+If you cannot set `contentCategory = "mcp"` during deployment, set the
+MCP category in Connect after deploying and set minimum processes to at
+least 1.
 
 ### R as an MCP client
 

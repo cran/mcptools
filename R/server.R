@@ -54,6 +54,34 @@
 #'
 #' The server will listen for HTTP POST requests containing JSON-RPC messages.
 #'
+#' ## Posit Connect
+#'
+#' To deploy an HTTP MCP server to Posit Connect, add a `_server.yml` file to
+#' the project directory:
+#'
+#' ```yaml
+#' engine: mcptools
+#' tools: tools.R
+#' ```
+#'
+#' The `tools` file should return a list of [ellmer::tool()] objects. Deploy
+#' the project as an R API and mark it as MCP content:
+#'
+#' ```r
+#' rsconnect::deployAPI(".", contentCategory = "mcp")
+#' ```
+#'
+#' Use the Connect content URL with `/mcp` appended as the MCP endpoint. For
+#' example, if the content URL is `https://connect.example.com/content/abc123/`,
+#' use `https://connect.example.com/content/abc123/mcp`. mcptools accepts
+#' requests at any path, so the content URL itself also works.
+#' If you cannot set `contentCategory = "mcp"` during deployment, set the MCP
+#' category in Connect after deploying and set minimum processes to at least 1.
+#'
+#' Connect deployments run tools inside the deployed R process by default.
+#' Session discovery with [mcp_session()] is intended for local desktop R
+#' sessions and is disabled by default on Connect.
+#'
 #' **mcp_server() is not intended for interactive use.**
 #'
 #' The server interfaces with the MCP client. If you'd like tools to have access
@@ -165,26 +193,13 @@ mcp_server_stdio <- function() {
   nanonext::pipe_notify(reader_socket, cv, remove = TRUE, flag = TRUE)
   client <- nanonext::recv_aio(reader_socket, mode = "string", cv = cv)
 
-  if (!the$sessions_enabled) {
-    while (nanonext::wait(cv)) {
-      if (!nanonext::unresolved(client)) {
-        handle_message_from_client(client$data)
-        client <- nanonext::recv_aio(reader_socket, mode = "string", cv = cv)
-      }
-    }
-    return()
+  if (the$sessions_enabled) {
+    the$server_socket <- nanonext::socket("poly")
+    on.exit(nanonext::reap(the$server_socket), add = TRUE)
+    nanonext::dial(the$server_socket, url = sprintf("%s%d", the$socket_url, 1L))
   }
 
-  the$server_socket <- nanonext::socket("poly")
-  on.exit(nanonext::reap(the$server_socket), add = TRUE)
-  nanonext::dial(the$server_socket, url = sprintf("%s%d", the$socket_url, 1L))
-  session <- nanonext::recv_aio(the$server_socket, mode = "string", cv = cv)
-
   while (nanonext::wait(cv)) {
-    if (!nanonext::unresolved(session)) {
-      handle_message_from_session(session$data)
-      session <- nanonext::recv_aio(the$server_socket, mode = "string", cv = cv)
-    }
     if (!nanonext::unresolved(client)) {
       handle_message_from_client(client$data)
       client <- nanonext::recv_aio(reader_socket, mode = "string", cv = cv)
@@ -214,12 +229,20 @@ mcp_server_http <- function(host = "127.0.0.1", port = 8080) {
 }
 
 handle_http_request <- function(req) {
+  if (!validate_shared_secret(req)) {
+    return(http_forbidden("Invalid shared secret"))
+  }
+
+  if (!validate_host(req)) {
+    return(http_forbidden("Invalid Host"))
+  }
+
   if (!validate_origin(req)) {
-    return(list(
-      status = 403L,
-      headers = list("Content-Type" = "application/json"),
-      body = to_json(list(error = "Invalid Origin"))
-    ))
+    return(http_forbidden("Invalid Origin"))
+  }
+
+  if (!validate_http_protocol_version(req)) {
+    return(http_bad_request("Invalid or unsupported MCP-Protocol-Version"))
   }
 
   if (req$REQUEST_METHOD == "POST") {
@@ -229,10 +252,70 @@ handle_http_request <- function(req) {
   } else {
     return(list(
       status = 405L,
-      headers = list("Allow" = "GET, POST"),
+      headers = list("Allow" = "POST"),
       body = "Method Not Allowed"
     ))
   }
+}
+
+http_forbidden <- function(error) {
+  list(
+    status = 403L,
+    headers = list("Content-Type" = "application/json"),
+    body = to_json(list(error = error))
+  )
+}
+
+http_bad_request <- function(error) {
+  list(
+    status = 400L,
+    headers = list("Content-Type" = "application/json"),
+    body = to_json(list(error = error))
+  )
+}
+
+validate_shared_secret <- function(req) {
+  shared_secret <- http_shared_secret()
+  if (!nzchar(shared_secret)) {
+    return(TRUE)
+  }
+
+  header <- req$HTTP_PLUMBER_SHARED_SECRET
+  if (is.null(header)) {
+    return(FALSE)
+  }
+
+  constant_time_equal(header, shared_secret)
+}
+
+http_shared_secret <- function() {
+  first_nonempty_string(
+    the$http_shared_secret,
+    getOption("mcptools.http_shared_secret", NULL),
+    getOption("plumber2.sharedSecret", "")
+  )
+}
+
+validate_host <- function(req) {
+  trusted_hosts <- http_trusted_hosts()
+  if (!length(trusted_hosts)) {
+    return(TRUE)
+  }
+
+  host <- req$HTTP_HOST
+  if (is.null(host)) {
+    return(FALSE)
+  }
+
+  host %in% trusted_hosts
+}
+
+http_trusted_hosts <- function() {
+  unique(c(
+    the$http_trusted_hosts,
+    getOption("mcptools.http_trusted_hosts", character()),
+    split_envvar(Sys.getenv("MCPTOOLS_HTTP_TRUSTED_HOSTS", ""))
+  ))
 }
 
 validate_origin <- function(req) {
@@ -241,10 +324,27 @@ validate_origin <- function(req) {
     return(TRUE)
   }
 
-  parsed <- httr2::url_parse(origin)
+  parsed <- url_parse_or_null(origin)
+  if (is.null(parsed)) {
+    return(FALSE)
+  }
+
   allowed_hosts <- c("localhost", "127.0.0.1", "[::1]")
 
-  return(parsed$hostname %in% allowed_hosts)
+  origin %in% http_allowed_origins() || parsed$hostname %in% allowed_hosts
+}
+
+http_allowed_origins <- function() {
+  unique(c(
+    the$http_allowed_origins,
+    getOption("mcptools.http_allowed_origins", character()),
+    split_envvar(Sys.getenv("MCPTOOLS_HTTP_ALLOWED_ORIGINS", ""))
+  ))
+}
+
+validate_http_protocol_version <- function(req) {
+  version <- req$HTTP_MCP_PROTOCOL_VERSION
+  is.null(version) || is_supported_protocol_version(version)
 }
 
 handle_http_post <- function(req) {
@@ -257,11 +357,7 @@ handle_http_post <- function(req) {
   )
 
   if (is.null(data)) {
-    return(list(
-      status = 400L,
-      headers = list("Content-Type" = "application/json"),
-      body = to_json(list(error = "Invalid JSON"))
-    ))
+    return(http_bad_request("Invalid JSON"))
   }
 
   if (is.null(data$id)) {
@@ -273,7 +369,10 @@ handle_http_post <- function(req) {
     ))
   }
 
-  result <- handle_http_request_message(data)
+  result <- handle_http_request_message(
+    data,
+    protocol_version = http_message_protocol_version(data, req)
+  )
 
   list(
     status = 200L,
@@ -285,8 +384,16 @@ handle_http_post <- function(req) {
 handle_http_get <- function(req) {
   list(
     status = 405L,
-    headers = list("Content-Type" = "text/plain"),
-    body = "SSE streaming not yet implemented"
+    headers = list(
+      "Allow" = "POST",
+      "Content-Type" = "text/plain"
+    ),
+    body = paste(
+      "mcptools MCP endpoint is running.",
+      "",
+      "HTTP GET/SSE is not supported; use POST from an MCP Streamable HTTP client.",
+      sep = "\n"
+    )
   )
 }
 
@@ -294,19 +401,33 @@ handle_http_notification_or_response <- function(data) {
   NULL
 }
 
-handle_http_request_message <- function(data) {
+http_message_protocol_version <- function(data, req) {
+  if (identical(data$method, "initialize")) {
+    client_version <- data$params$protocolVersion %||% latest_protocol_version
+    return(negotiate_protocol_version(client_version))
+  }
+
+  req$HTTP_MCP_PROTOCOL_VERSION %||% default_http_protocol_version
+}
+
+handle_http_request_message <- function(
+  data,
+  protocol_version = the$protocol_version %||% latest_protocol_version
+) {
   if (data$method == "initialize") {
     # while protocolVersion is required per spec,
     # we fall back rather than erroring
     client_version <- data$params$protocolVersion %||% latest_protocol_version
     negotiated <- negotiate_protocol_version(client_version)
+    the$protocol_version <- negotiated
     return(jsonrpc_response(data$id, capabilities(negotiated)))
   } else if (data$method == "tools/list") {
     return(jsonrpc_response(
       data$id,
-      list(tools = get_mcptools_tools_as_json())
+      list(tools = get_mcptools_tools_as_json(protocol_version))
     ))
   } else if (data$method == "tools/call") {
+    data$protocolVersion <- protocol_version
     tool_name <- data$params$name
     if (
       !the$sessions_enabled ||
@@ -324,9 +445,7 @@ handle_http_request_message <- function(data) {
         return(prepared)
       }
 
-      nanonext::send(the$server_socket, prepared, mode = "serial")
-      response_raw <- nanonext::recv(the$server_socket, mode = "character")
-      return(jsonlite::parse_json(response_raw))
+      return(forward_request(data))
     }
   } else {
     return(jsonrpc_response(
@@ -364,6 +483,7 @@ handle_message_from_client <- function(line) {
       data$id,
       error = list(code = -32600, message = "Invalid Request")
     ))
+    return()
   }
 
   # If we made it here, it's valid JSON
@@ -373,6 +493,7 @@ handle_message_from_client <- function(line) {
     # we fall back rather than erroring
     client_version <- data$params$protocolVersion %||% latest_protocol_version
     negotiated <- negotiate_protocol_version(client_version)
+    the$protocol_version <- negotiated
     res <- jsonrpc_response(data$id, capabilities(negotiated))
     cat_json(res)
   } else if (data$method == "tools/list") {
@@ -398,6 +519,8 @@ handle_message_from_client <- function(line) {
       handle_request(data)
     } else {
       result <- forward_request(data)
+      logcat(c("FROM SESSION: ", to_json(result)))
+      cat_json(result)
     }
   } else if (is.null(data$id)) {
     # If there is no `id` in the request, then this is a notification and the
@@ -431,7 +554,142 @@ forward_request <- function(data) {
     return(prepared)
   }
 
-  nanonext::send_aio(the$server_socket, prepared, mode = "serial")
+  drain_stale_forwarded_responses()
+
+  timeout <- session_response_timeout()
+  send_result <- nanonext::send(
+    the$server_socket,
+    prepared,
+    mode = "serial",
+    block = timeout
+  )
+
+  if (nanonext::is_error_value(send_result) || !identical(send_result, 0L)) {
+    return(session_forwarding_error(
+      data$id,
+      "Failed to send the request to the selected R session."
+    ))
+  }
+
+  receive_forwarded_response(data$id, timeout)
+}
+
+receive_forwarded_response <- function(id, timeout) {
+  deadline <- Sys.time() + timeout / 1000
+
+  repeat {
+    response_raw <- nanonext::recv(
+      the$server_socket,
+      mode = "character",
+      block = remaining_timeout(deadline)
+    )
+
+    if (!is.character(response_raw) || nanonext::is_error_value(response_raw)) {
+      return(session_forwarding_error(
+        id,
+        sprintf(
+          "Timed out waiting for a response from the selected R session after %s.",
+          format_timeout(timeout)
+        )
+      ))
+    }
+
+    response <- tryCatch(
+      jsonlite::parse_json(response_raw),
+      error = function(err) {
+        session_forwarding_error(
+          id,
+          paste(
+            "Received an invalid response from the selected R session:",
+            conditionMessage(err)
+          )
+        )
+      }
+    )
+
+    if (!is.list(response)) {
+      return(session_forwarding_error(
+        id,
+        "Received an invalid response from the selected R session."
+      ))
+    }
+
+    if (matches_jsonrpc_id(response, id)) {
+      return(response)
+    }
+
+    logcat(c(
+      "Ignoring stale forwarded response for request id ",
+      format_jsonrpc_id(response)
+    ))
+  }
+}
+
+drain_stale_forwarded_responses <- function() {
+  repeat {
+    response_raw <- nanonext::recv(
+      the$server_socket,
+      mode = "character",
+      block = FALSE
+    )
+
+    if (!is.character(response_raw) || nanonext::is_error_value(response_raw)) {
+      return(invisible())
+    }
+
+    logcat(c("Ignoring queued stale forwarded response: ", response_raw))
+  }
+}
+
+session_forwarding_error <- function(id, message) {
+  jsonrpc_response(
+    id,
+    error = list(code = -32603, message = message)
+  )
+}
+
+remaining_timeout <- function(deadline) {
+  remaining <- as.numeric(difftime(deadline, Sys.time(), units = "secs"))
+  max(1L, as.integer(ceiling(remaining * 1000)))
+}
+
+matches_jsonrpc_id <- function(response, id) {
+  identical(response$id, id)
+}
+
+session_response_timeout <- function() {
+  seconds <- getOption(
+    "mcptools.session_response_timeout_seconds",
+    Sys.getenv("MCPTOOLS_SESSION_RESPONSE_TIMEOUT_SECONDS", "120")
+  )
+  seconds <- suppressWarnings(as.numeric(seconds))
+
+  if (length(seconds)) {
+    seconds <- seconds[[1]]
+  }
+
+  if (!length(seconds) || is.na(seconds) || seconds <= 0) {
+    seconds <- 120
+  }
+
+  as.integer(ceiling(seconds * 1000))
+}
+
+format_timeout <- function(timeout) {
+  seconds <- timeout / 1000
+  if (identical(seconds, 1)) {
+    return("1 second")
+  }
+
+  sprintf("%s seconds", seconds)
+}
+
+format_jsonrpc_id <- function(response) {
+  if (is.null(response$id)) {
+    return("<missing>")
+  }
+
+  paste(response$id, collapse = ", ")
 }
 
 # This process will be launched by the MCP client, so stdout/stderr aren't
@@ -476,7 +734,7 @@ capabilities <- function(protocol_version = latest_protocol_version) {
   res
 }
 
-tool_as_json <- function(tool) {
+tool_as_json <- function(tool, protocol_version = latest_protocol_version) {
   dummy_provider <- ellmer::Provider("dummy", "dummy", "dummy")
 
   as_json <- getNamespace("ellmer")[["as_json"]]
@@ -490,11 +748,40 @@ tool_as_json <- function(tool) {
     inputSchema$properties <- structure(list(), names = character())
   }
 
-  list(
+  compact(list(
     name = tool@name,
+    title = tool_title_as_json(tool@annotations, protocol_version),
     description = tool@description,
-    inputSchema = inputSchema
+    inputSchema = inputSchema,
+    annotations = tool_annotations_as_json(tool@annotations)
+  ))
+}
+
+tool_title_as_json <- function(annotations, protocol_version) {
+  if (protocol_version_lt(protocol_version, "2025-06-18")) {
+    return(NULL)
+  }
+
+  annotations$title
+}
+
+tool_annotations_as_json <- function(annotations) {
+  if (!length(annotations)) {
+    return(NULL)
+  }
+
+  mcp_names <- c(
+    read_only_hint = "readOnlyHint",
+    destructive_hint = "destructiveHint",
+    idempotent_hint = "idempotentHint",
+    open_world_hint = "openWorldHint"
   )
+  annotation_names <- names(annotations)
+  matched_names <- annotation_names %in% names(mcp_names)
+  annotation_names[matched_names] <- mcp_names[annotation_names[matched_names]]
+  names(annotations) <- annotation_names
+
+  annotations
 }
 
 compact <- function(.x) {
@@ -543,10 +830,13 @@ append_tool_fn <- function(data) {
         data$id,
         error = list(code = -32601, message = "Method not found")
       ),
-      class = "jsonrpc_error"
+      class = c("jsonrpc_error", "list")
     ))
   }
 
+  data$protocolVersion <- data$protocolVersion %||%
+    the$protocol_version %||%
+    latest_protocol_version
   data$tool <- get_mcptools_tools()[[tool_name]]
   data
 }

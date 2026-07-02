@@ -47,6 +47,169 @@ test_that("as_tool_call_result handles ContentToolResult with error", {
   expect_true(output$result$isError)
 })
 
+test_that("as_tool_call_result returns structuredContent for named lists", {
+  data <- list(id = 1, protocolVersion = "2025-06-18")
+  result <- list(auc = 0.92, tss = 0.81)
+
+  output <- as_tool_call_result(data, result)
+
+  expect_equal(
+    output$result$content[[1]],
+    list(
+      type = "text",
+      text = "{\"auc\":0.92,\"tss\":0.81}"
+    )
+  )
+  expect_equal(output$result$structuredContent, result)
+  expect_false(output$result$isError)
+})
+
+test_that("as_tool_call_result gates structuredContent by protocol version", {
+  data <- list(id = 1, protocolVersion = "2025-03-26")
+  result <- list(auc = 0.92, tss = 0.81)
+
+  output <- as_tool_call_result(data, result)
+
+  expect_null(output$result$structuredContent)
+  expect_equal(output$result$content[[1]]$text, "0.92\n0.81")
+  expect_false(output$result$isError)
+})
+
+test_that("as_tool_call_result handles ContentToolResult with structured value", {
+  data <- list(id = 1, protocolVersion = "2025-06-18")
+  result <- ellmer::ContentToolResult(value = list(auc = 0.92))
+
+  output <- as_tool_call_result(data, result)
+
+  expect_equal(
+    output$result$content[[1]],
+    list(
+      type = "text",
+      text = "{\"auc\":0.92}"
+    )
+  )
+  expect_equal(output$result$structuredContent, list(auc = 0.92))
+  expect_false(output$result$isError)
+})
+
+test_that("as_tool_call_result omits structuredContent for tool errors", {
+  data <- list(id = 1, protocolVersion = "2025-06-18")
+  result <- ellmer::ContentToolResult(error = "bad input")
+
+  output <- as_tool_call_result(data, result)
+
+  expect_null(output$result$structuredContent)
+  expect_match(output$result$content[[1]]$text, "bad input")
+  expect_true(output$result$isError)
+})
+
+test_that("as_tool_call_result handles direct image content", {
+  data <- list(id = 1)
+  result <- ellmer::ContentImageInline(type = "image/png", data = "abc123")
+
+  output <- as_tool_call_result(data, result)
+
+  expect_equal(output$result$content[[1]]$type, "image")
+  expect_equal(output$result$content[[1]]$data, "abc123")
+  expect_equal(output$result$content[[1]]$mimeType, "image/png")
+  expect_false(output$result$isError)
+})
+
+test_that("as_tool_call_result handles ContentToolResult with image content", {
+  data <- list(id = 1)
+  image <- ellmer::ContentImageInline(type = "image/png", data = "abc123")
+  result <- ellmer::ContentToolResult(value = image)
+
+  output <- as_tool_call_result(data, result)
+
+  expect_equal(output$result$content[[1]]$type, "image")
+  expect_equal(output$result$content[[1]]$data, "abc123")
+  expect_equal(output$result$content[[1]]$mimeType, "image/png")
+  expect_false(output$result$isError)
+})
+
+test_that("as_tool_call_result inlines remote image content", {
+  data <- list(id = 1)
+  result <- ellmer::content_image_url("https://example.com/img.png")
+
+  # large enough that MIME-style base64 wrapping would insert newlines
+  body <- as.raw(rep(0:255, 4))
+  httr2::local_mocked_responses(list(
+    httr2::response(
+      status_code = 200,
+      headers = list("Content-Type" = "image/jpeg"),
+      body = body
+    )
+  ))
+
+  output <- as_tool_call_result(data, result)
+
+  expect_equal(output$result$content[[1]]$type, "image")
+  expect_equal(output$result$content[[1]]$mimeType, "image/jpeg")
+  expect_false(grepl("\n", output$result$content[[1]]$data))
+  expect_equal(jsonlite::base64_dec(output$result$content[[1]]$data), body)
+  expect_false(output$result$isError)
+})
+
+test_that("as_tool_call_result surfaces remote image fetch failures", {
+  data <- list(id = 1)
+  result <- ellmer::content_image_url("https://example.com/missing.png")
+
+  httr2::local_mocked_responses(list(httr2::response(status_code = 404)))
+
+  expect_error(
+    as_tool_call_result(data, result),
+    "Failed to fetch remote image content"
+  )
+})
+
+test_that("as_tool_call_result handles bare mixed content", {
+  data <- list(id = 1)
+  image <- ellmer::ContentImageInline(type = "image/png", data = "abc123")
+  result <- list("caption", image)
+
+  output <- as_tool_call_result(data, result)
+
+  expect_equal(
+    output$result$content[[1]],
+    list(type = "text", text = "caption")
+  )
+  expect_equal(
+    output$result$content[[2]],
+    list(
+      type = "image",
+      data = "abc123",
+      mimeType = "image/png"
+    )
+  )
+  expect_null(output$result$structuredContent)
+  expect_false(output$result$isError)
+})
+
+test_that("as_tool_call_result handles mixed ellmer content", {
+  data <- list(id = 1)
+  text <- ellmer::ContentText(text = "caption")
+  image <- ellmer::ContentImageInline(type = "image/png", data = "abc123")
+  result <- ellmer::ContentToolResult(value = list(text, image))
+
+  output <- as_tool_call_result(data, result)
+
+  expect_equal(
+    output$result$content[[1]],
+    list(type = "text", text = "caption")
+  )
+  expect_equal(
+    output$result$content[[2]],
+    list(
+      type = "image",
+      data = "abc123",
+      mimeType = "image/png"
+    )
+  )
+  expect_null(output$result$structuredContent)
+  expect_false(output$result$isError)
+})
+
 test_that("as_tool_call_result handles vector results", {
   data <- list(id = 1)
   result <- c("line1", "line2", "line3")
@@ -55,6 +218,25 @@ test_that("as_tool_call_result handles vector results", {
 
   expect_equal(output$result$content[[1]]$text, "line1\nline2\nline3")
   expect_false(output$result$isError)
+})
+
+test_that("as_tool_call_result omits structuredContent for non-object results", {
+  data <- list(id = 1, protocolVersion = "2025-06-18")
+
+  unnamed <- as_tool_call_result(data, list(1, 2))
+  frame <- as_tool_call_result(data, data.frame(a = 1:2, b = c("x", "y")))
+
+  expect_null(unnamed$result$structuredContent)
+  expect_null(frame$result$structuredContent)
+})
+
+test_that("as_tool_call_result preserves names in atomic structured results", {
+  data <- list(id = 1, protocolVersion = "2025-06-18")
+
+  output <- as_tool_call_result(data, c(auc = 0.92, tss = 0.81))
+
+  expect_equal(output$result$structuredContent, list(auc = 0.92, tss = 0.81))
+  expect_equal(output$result$content[[1]]$text, "{\"auc\":0.92,\"tss\":0.81}")
 })
 
 test_that("drop_nulls works", {

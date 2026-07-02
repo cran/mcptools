@@ -1,3 +1,69 @@
+# mcptools 1.0.0
+
+## `mcp_server()`
+
+**New features**:
+
+* mcptools can now run as a Posit Connect R API engine. Add a `_server.yml`
+  with `engine: mcptools`, point `tools` to an `.R` file returning
+  `ellmer::tool()` objects, and deploy with
+  `rsconnect::deployAPI(".", contentCategory = "mcp")`.
+
+* `mcp_server()` can now return inline image content from tools that produce
+  `ellmer::ContentImageInline` results, including mixed text and image content
+  (#96, #102).
+
+* `mcp_server()` now returns `structuredContent` alongside serialized JSON text
+  for successful tool results that are naturally represented as JSON objects,
+  when using MCP protocol version 2025-06-18 or later (#104).
+
+* `mcp_server()` now includes ellmer tool annotations in `tools/list`
+  responses, preserving MCP safety hints such as `title`, `readOnlyHint`,
+  `destructiveHint`, `idempotentHint`, and `openWorldHint` (#100, #105).
+
+**Bug fixes**:
+
+* HTTP `mcp_server()` requests now honor the `MCP-Protocol-Version` header,
+  return `400 Bad Request` for unsupported protocol versions, and no longer let
+  protocol negotiation from one HTTP client shape responses for another.
+
+* JSON output now serializes R `NULL` values as JSON `null`, fixing JSON-RPC
+  responses with null request IDs.
+
+* `mcp_server()` no longer falls through after reporting `Invalid Request` for
+  invalid stdio client messages.
+
+* Forwarded `mcp_session()` tool calls now return JSON-RPC errors when the
+  selected R session does not respond within two minutes, rather than hanging
+  indefinitely. Configure the timeout with the
+  `mcptools.session_response_timeout_seconds` option or the
+  `MCPTOOLS_SESSION_RESPONSE_TIMEOUT_SECONDS` environment variable. Session
+  receive errors are also logged instead of silently discarded (#98).
+
+## `mcp_tools()`
+
+**New features**:
+
+* `mcp_tools()` can now connect directly to remote Streamable HTTP MCP servers,
+  configured with `url` instead of `command`. Static `headers` are supported for
+  token auth, and full OAuth 2.1 (authorization-server discovery, Dynamic Client
+  Registration, PKCE, and automatic token refresh) is handled via httr2, which
+  also caches tokens across sessions (#88).
+
+* `mcp_tools()` now converts MCP tool-result content blocks into ellmer-native
+  text and image content, allowing ellmer chats to receive image results from
+  MCP tools.
+
+**Bug fixes**:
+
+* `mcp_tools()` now launches MCP server processes with an allowlisted
+  environment plus configured `env` variables. Previously, servers without
+  configured `env` inherited the full R process environment, while servers with
+  configured `env` received only those variables. The new behavior more closely
+  matches reference MCP SDKs, reduces accidental credential exposure, and fixes
+  Windows startup failures when `env` is configured. Servers that need
+  additional non-allowlisted variables should list them in `env` (#62).
+
 # mcptools 0.2.1
 
 * `mcp_server()` now ensures that `inputSchema` always includes a `properties`
@@ -24,7 +90,7 @@
 
 ## Client
 
-- Notably, `mcp_tools()` did not gain an implementation of the HTTP transport. Instead, we now recommend the [mcp-remote](https://www.npmjs.com/package/mcp-remote) tool for serving local MCP servers via the HTTP transport in the documentation.
+- Notably, `mcp_tools()` did not gain an implementation of the HTTP transport. Instead, we now recommend the `@npx mcp-remote` tool for serving local MCP servers via the HTTP transport in the documentation.
 
 * `mcp_tools()` now errors more informatively when an MCP server process exits unexpectedly (#82).
 
