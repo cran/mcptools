@@ -75,9 +75,9 @@ the$mcp_servers <- list()
 #' For remote Streamable HTTP MCP servers, configure a server with `url`.
 #' Static headers can be supplied with `headers`; protocol-owned headers such
 #' as `Accept`, `Content-Type`, `MCP-Session-Id`, and `MCP-Protocol-Version`
-#' are managed by mcptools and cannot be configured manually. Credentialed
-#' public remote endpoints must use HTTPS. HTTP is allowed for loopback
-#' development servers, or for explicit unsafe opt-out with `allow_http`.
+#' are managed by mcptools and cannot be configured manually. Remote endpoints
+#' must use HTTPS; HTTP is allowed only for loopback development servers or for
+#' explicit unsafe opt-out with `allow_http`.
 #'
 #' Remote server entries support these fields:
 #'
@@ -225,7 +225,10 @@ add_mcp_server <- function(config, name, call = caller_env()) {
   }
 
   transport <- mcp_transport(config, call = call)
-  ignore_tools <- mcp_ignore_tools(config$ignore_tools %||% character(), call = call)
+  ignore_tools <- mcp_ignore_tools(
+    config$ignore_tools %||% character(),
+    call = call
+  )
 
   if (identical(transport$type, "stdio")) {
     process <- transport$process
@@ -250,7 +253,11 @@ add_mcp_server <- function(config, name, call = caller_env()) {
         mcp_request_initialize(id = next_id)
       )
       next_id <- next_id + 1L
-      mcp_transport_store_initialize(transport, response_initialize, call = call)
+      mcp_transport_store_initialize(
+        transport,
+        response_initialize,
+        call = call
+      )
 
       mcp_transport_notify(transport, mcp_request_initialized())
 
@@ -266,7 +273,8 @@ add_mcp_server <- function(config, name, call = caller_env()) {
     error = function(e) {
       if (
         identical(transport$type, "stdio") &&
-          process$get_exit_status() %in% c(1L, 2L)
+          # NULL when the process is still alive, e.g. slow to respond
+          isTRUE(process$get_exit_status() %in% c(1L, 2L))
       ) {
         cli::cli_abort(
           c(
@@ -341,9 +349,11 @@ mcp_transport_http <- function(config, call = caller_env()) {
   }
 
   oauth <- mcp_config_oauth(config, call = call)
+  # the conflict check keys on explicitly configured oauth: since OAuth now
+  # auto-engages on a 401, `oauth` is always populated and can't stand in for it.
   headers <- mcp_config_headers(
     config$headers %||% list(),
-    oauth = oauth,
+    oauth = config$oauth %||% list(),
     call = call
   )
   allow_http <- mcp_config_allow_http(config, call = call)
@@ -351,8 +361,6 @@ mcp_transport_http <- function(config, call = caller_env()) {
 
   mcp_validate_http_endpoint_security(
     config$url,
-    headers = headers,
-    oauth = oauth,
     allow_http = allow_http,
     call = call
   )
@@ -391,7 +399,12 @@ mcp_transport_request <- function(transport, message, call = caller_env()) {
 
 mcp_transport_notify <- function(transport, message, call = caller_env()) {
   if (identical(transport$type, "http")) {
-    return(mcp_transport_http_send(transport, message, expect_response = FALSE, call = call))
+    return(mcp_transport_http_send(
+      transport,
+      message,
+      expect_response = FALSE,
+      call = call
+    ))
   }
 
   mcp_transport_stdio_send(transport, message, expect_response = FALSE)
@@ -473,7 +486,9 @@ mcp_config_allow_http <- function(config, call = caller_env()) {
     config$oauth$allow_http %||%
     FALSE
 
-  if (!is.logical(allow_http) || length(allow_http) != 1L || is.na(allow_http)) {
+  if (
+    !is.logical(allow_http) || length(allow_http) != 1L || is.na(allow_http)
+  ) {
     cli::cli_abort(
       c(
         "MCP HTTP server configuration failed.",
@@ -491,7 +506,12 @@ mcp_config_timeout <- function(timeout, call = caller_env()) {
     return(NULL)
   }
 
-  if (!is.numeric(timeout) || length(timeout) != 1L || is.na(timeout) || timeout <= 0) {
+  if (
+    !is.numeric(timeout) ||
+      length(timeout) != 1L ||
+      is.na(timeout) ||
+      timeout <= 0
+  ) {
     cli::cli_abort(
       c(
         "MCP HTTP server configuration failed.",
@@ -506,8 +526,6 @@ mcp_config_timeout <- function(timeout, call = caller_env()) {
 
 mcp_validate_http_endpoint_security <- function(
   url,
-  headers = character(),
-  oauth = list(),
   allow_http = FALSE,
   call = caller_env()
 ) {
@@ -527,10 +545,8 @@ mcp_validate_http_endpoint_security <- function(
     return(invisible(TRUE))
   }
 
-  if (length(headers) == 0 && length(oauth) == 0) {
-    return(invisible(TRUE))
-  }
-
+  # a bare `url` can receive an OAuth bearer token once we auto-engage on a 401,
+  # so every remote plaintext endpoint is treated as credentialed
   cli::cli_abort(
     c(
       "MCP HTTP server configuration failed.",
@@ -592,11 +608,9 @@ mcp_config_interpolate_env <- function(x, call = caller_env()) {
 }
 
 mcp_config_oauth <- function(config, call = caller_env()) {
+  # defaults are always populated, even without an `oauth` block, so that OAuth
+  # auto-engages on a 401 whenever no static Authorization header is configured.
   oauth <- mcp_config_interpolate_env(config$oauth %||% list(), call = call)
-
-  if (length(oauth) == 0) {
-    return(named_list())
-  }
 
   scope <- oauth$scope %||% NULL
   scope_mode <- oauth$scope_mode %||% NULL
@@ -662,10 +676,18 @@ mcp_config_oauth_callback_port <- function(callback_port, call = caller_env()) {
 }
 
 # initialize and tool listing -------------------------------------------------
-mcp_transport_store_initialize <- function(transport, response, call = caller_env()) {
+mcp_transport_store_initialize <- function(
+  transport,
+  response,
+  call = caller_env()
+) {
   if (!is.null(response$error)) {
+    msg <- response$error$message
     cli::cli_abort(
-      response$error$message %||% "MCP initialize failed.",
+      c(
+        "MCP initialize failed.",
+        if (!is.null(msg)) c(i = "Server message: {msg}.")
+      ),
       call = call
     )
   }
@@ -677,7 +699,8 @@ mcp_transport_store_initialize <- function(transport, response, call = caller_en
     )
   }
 
-  protocol_version <- response$result$protocolVersion %||% latest_protocol_version
+  protocol_version <- response$result$protocolVersion %||%
+    latest_protocol_version
 
   if (!protocol_version %in% supported_protocol_versions) {
     cli::cli_abort(
@@ -697,8 +720,9 @@ mcp_transport_store_initialize <- function(transport, response, call = caller_en
 mcp_request_tools_list_all <- function(transport, id, call = caller_env()) {
   tools <- list()
   next_cursor <- NULL
+  max_pages <- mcp_tools_list_max_pages()
 
-  repeat {
+  for (page in seq_len(max_pages)) {
     response <- mcp_transport_request(
       transport,
       mcp_request_tools_list(id = id, cursor = next_cursor)
@@ -706,8 +730,12 @@ mcp_request_tools_list_all <- function(transport, id, call = caller_env()) {
     id <- id + 1L
 
     if (!is.null(response$error)) {
+      msg <- response$error$message
       cli::cli_abort(
-        response$error$message %||% "MCP tools/list failed.",
+        c(
+          "MCP tools/list failed.",
+          if (!is.null(msg)) c(i = "Server message: {msg}.")
+        ),
         call = call
       )
     }
@@ -718,6 +746,15 @@ mcp_request_tools_list_all <- function(transport, id, call = caller_env()) {
     if (is.null(next_cursor) || !nzchar(next_cursor)) {
       break
     }
+
+    if (page == max_pages) {
+      cli::cli_warn(c(
+        "MCP server returned more than {max_pages} pages of tools; stopping \\
+         pagination and using the tools collected so far.",
+        i = "Set the {.envvar MCPTOOLS_TOOLS_LIST_MAX_PAGES} environment \\
+             variable to raise the cap."
+      ))
+    }
   }
 
   response$result$tools <- tools
@@ -726,6 +763,13 @@ mcp_request_tools_list_all <- function(transport, id, call = caller_env()) {
     response = response,
     next_id = id
   )
+}
+
+mcp_tools_list_max_pages <- function() {
+  max_pages <- suppressWarnings(
+    as.integer(Sys.getenv("MCPTOOLS_TOOLS_LIST_MAX_PAGES", "100"))
+  )
+  if (is.na(max_pages) || max_pages < 1L) 100L else max_pages
 }
 
 mcp_ignore_tools <- function(ignore_tools = character(), call = caller_env()) {
@@ -747,17 +791,23 @@ mcp_ignore_tools <- function(ignore_tools = character(), call = caller_env()) {
   ignore_tools
 }
 
-mcp_filter_tools <- function(tools, ignore_tools = character(), call = caller_env()) {
+mcp_filter_tools <- function(
+  tools,
+  ignore_tools = character(),
+  call = caller_env()
+) {
   ignore_tools <- mcp_ignore_tools(ignore_tools, call = call)
   if (length(ignore_tools) == 0) {
     return(tools)
   }
 
-  tools[!vapply(
-    tools,
-    function(tool) mcp_tool_ignored(tool$name, ignore_tools),
-    logical(1)
-  )]
+  tools[
+    !vapply(
+      tools,
+      function(tool) mcp_tool_ignored(tool$name, ignore_tools),
+      logical(1)
+    )
+  ]
 }
 
 mcp_tool_ignored <- function(tool, ignore_tools = character()) {
@@ -805,9 +855,20 @@ mcp_process_error_lines <- function(process) {
 mcp_inherited_env_vars <- function() {
   platform_vars <- if (identical(.Platform$OS.type, "windows")) {
     c(
-      "APPDATA", "HOMEDRIVE", "HOMEPATH", "LOCALAPPDATA", "PATH", "PATHEXT",
-      "PROCESSOR_ARCHITECTURE", "SYSTEMDRIVE", "SYSTEMROOT", "TEMP", "TMP",
-      "USERNAME", "USERPROFILE", "WINDIR"
+      "APPDATA",
+      "HOMEDRIVE",
+      "HOMEPATH",
+      "LOCALAPPDATA",
+      "PATH",
+      "PATHEXT",
+      "PROCESSOR_ARCHITECTURE",
+      "SYSTEMDRIVE",
+      "SYSTEMROOT",
+      "TEMP",
+      "TMP",
+      "USERNAME",
+      "USERPROFILE",
+      "WINDIR"
     )
   } else {
     c("HOME", "LOGNAME", "PATH", "SHELL", "TERM", "TMPDIR", "USER")
@@ -815,14 +876,41 @@ mcp_inherited_env_vars <- function() {
 
   unique(c(
     platform_vars,
-    "R_HOME", "R_LIBS", "R_LIBS_USER", "R_LIBS_SITE", "R_PROFILE",
-    "R_PROFILE_USER", "R_ENVIRON", "R_ENVIRON_USER", "R_USER", "TZ",
-    "LANG", "LC_ALL", "LC_COLLATE", "LC_CTYPE", "LC_MESSAGES",
-    "LC_MONETARY", "LC_NUMERIC", "LC_TIME", "LC_ADDRESS",
-    "LC_IDENTIFICATION", "LC_MEASUREMENT", "LC_NAME", "LC_PAPER",
-    "LC_TELEPHONE", "HTTP_PROXY", "HTTPS_PROXY", "NO_PROXY", "http_proxy",
-    "https_proxy", "no_proxy", "SSL_CERT_FILE", "SSL_CERT_DIR",
-    "CURL_CA_BUNDLE", "REQUESTS_CA_BUNDLE", "NODE_EXTRA_CA_CERTS",
+    "R_HOME",
+    "R_LIBS",
+    "R_LIBS_USER",
+    "R_LIBS_SITE",
+    "R_PROFILE",
+    "R_PROFILE_USER",
+    "R_ENVIRON",
+    "R_ENVIRON_USER",
+    "R_USER",
+    "TZ",
+    "LANG",
+    "LC_ALL",
+    "LC_COLLATE",
+    "LC_CTYPE",
+    "LC_MESSAGES",
+    "LC_MONETARY",
+    "LC_NUMERIC",
+    "LC_TIME",
+    "LC_ADDRESS",
+    "LC_IDENTIFICATION",
+    "LC_MEASUREMENT",
+    "LC_NAME",
+    "LC_PAPER",
+    "LC_TELEPHONE",
+    "HTTP_PROXY",
+    "HTTPS_PROXY",
+    "NO_PROXY",
+    "http_proxy",
+    "https_proxy",
+    "no_proxy",
+    "SSL_CERT_FILE",
+    "SSL_CERT_DIR",
+    "CURL_CA_BUNDLE",
+    "REQUESTS_CA_BUNDLE",
+    "NODE_EXTRA_CA_CERTS",
     "JAVA_HOME"
   ))
 }
@@ -995,7 +1083,11 @@ call_tool <- function(..., server, tool) {
   mcp_tool_result_as_ellmer(response)
 }
 
-mcp_server_request_cancellable <- function(server, request, call = caller_env()) {
+mcp_server_request_cancellable <- function(
+  server,
+  request,
+  call = caller_env()
+) {
   tryCatch(
     mcp_server_request(server, request, call = call),
     interrupt = function(err) {
@@ -1084,9 +1176,15 @@ mcp_tool_result_as_ellmer <- function(response) {
     ))
   }
 
-  if (all(vapply(result$content, function(block) {
-    identical(block$type, "text")
-  }, logical(1)))) {
+  if (
+    all(vapply(
+      result$content,
+      function(block) {
+        identical(block$type, "text")
+      },
+      logical(1)
+    ))
+  ) {
     return(mcp_content_as_text(result$content))
   }
 
@@ -1134,13 +1232,17 @@ mcp_content_as_text <- function(content) {
     return("")
   }
 
-  text <- vapply(content, function(block) {
-    if (identical(block$type, "text")) {
-      return(block$text %||% "")
-    }
+  text <- vapply(
+    content,
+    function(block) {
+      if (identical(block$type, "text")) {
+        return(block$text %||% "")
+      }
 
-    to_json(block)
-  }, character(1))
+      to_json(block)
+    },
+    character(1)
+  )
 
   paste(text, collapse = "\n")
 }
@@ -1213,7 +1315,11 @@ mcp_secret_fields <- function() {
 }
 
 # client protocol: stdio --------------------------------------------------------
-mcp_transport_stdio_send <- function(transport, message, expect_response = TRUE) {
+mcp_transport_stdio_send <- function(
+  transport,
+  message,
+  expect_response = TRUE
+) {
   json_msg <- jsonlite::toJSON(message, auto_unbox = TRUE)
   mcp_log_json_message("FROM CLIENT: ", message)
   transport$process$write_input(paste0(json_msg, "\n"))
@@ -1252,12 +1358,14 @@ mcp_transport_stdio_close <- function(transport) {
     process$kill()
   }
 
-  the$server_processes <- the$server_processes[!vapply(
-    the$server_processes,
-    identical,
-    logical(1),
-    process
-  )]
+  the$server_processes <- the$server_processes[
+    !vapply(
+      the$server_processes,
+      identical,
+      logical(1),
+      process
+    )
+  ]
 
   invisible(TRUE)
 }

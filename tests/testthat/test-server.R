@@ -21,13 +21,18 @@ test_that("roundtrip mcp_server and mcp_tools (stdio)", {
   previous_server_processes <- names(the$server_processes)
 
   # example-config configures `Rscript -e "mcptools::mcp_server()"`
-  example_config <- readLines(system.file(
+  example_config <- jsonlite::read_json(system.file(
     "example-config.json",
     package = "mcptools"
   ))
-  example_config <- gsub("Rscript", rscript_binary(), example_config)
+  example_config$mcpServers$mcptools$command <- rscript_binary()
+  # spawned servers receive an allowlisted environment, so the socket directory
+  # override from setup.R must be forwarded through the config's env block
+  example_config$mcpServers$mcptools$env <- list(
+    MCPTOOLS_SOCKET_DIR = Sys.getenv("MCPTOOLS_SOCKET_DIR")
+  )
   tmp_file <- withr::local_tempfile(fileext = ".json")
-  writeLines(example_config, tmp_file)
+  jsonlite::write_json(example_config, tmp_file, auto_unbox = TRUE)
 
   tools <- mcp_tools(tmp_file)
   withr::defer(
@@ -366,6 +371,7 @@ test_that("forward_request times out when session does not respond", {
     the$server_tools <- old_server_tools
   })
 
+  local_socket_secret()
   test_tool <- ellmer::tool(function() "ok", "Test tool", name = "test_tool")
   set_server_tools(list(test_tool), session_tools = FALSE)
   testthat::local_mocked_bindings(session_response_timeout = function() 10L)
@@ -403,6 +409,7 @@ test_that("forward_request ignores stale responses", {
     the$server_tools <- old_server_tools
   })
 
+  local_socket_secret()
   test_tool <- ellmer::tool(function() "ok", "Test tool", name = "test_tool")
   set_server_tools(list(test_tool), session_tools = FALSE)
   testthat::local_mocked_bindings(session_response_timeout = function() 20L)
@@ -422,7 +429,9 @@ test_that("forward_request ignores stale responses", {
   expect_identical(
     nanonext::send(
       session_socket,
-      to_json(jsonrpc_response(99, result = list(ok = TRUE))),
+      mac_seal(charToRaw(as.character(
+        to_json(jsonrpc_response(99, result = list(ok = TRUE)))
+      ))),
       mode = "raw"
     ),
     0L
@@ -449,6 +458,7 @@ test_that("receive_forwarded_response errors for non-object JSON", {
     the$server_tools <- old_server_tools
   })
 
+  local_socket_secret()
   the$socket_url <- local_inproc_url()
   session_socket <- nanonext::socket("poly")
   withr::defer(nanonext::reap(session_socket))
@@ -461,7 +471,14 @@ test_that("receive_forwarded_response errors for non-object JSON", {
     0L
   )
 
-  expect_identical(nanonext::send(session_socket, "\"oops\"", mode = "raw"), 0L)
+  expect_identical(
+    nanonext::send(
+      session_socket,
+      mac_seal(charToRaw("\"oops\"")),
+      mode = "raw"
+    ),
+    0L
+  )
 
   res <- receive_forwarded_response(1, 10L)
 

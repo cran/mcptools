@@ -91,6 +91,20 @@
 #' `usethis::edit_r_profile()`, to make every interactive R session you start
 #' available to the server.
 #'
+#' The server and its sessions find each other through per-user IPC sockets on
+#' the local machine, so only sessions running as the same user on the same host
+#' are discoverable. On Linux and macOS the sockets live in an owner-only
+#' directory; set the `MCPTOOLS_SOCKET_DIR` environment variable (before the
+#' package loads) to override its location.
+#'
+#' When several sessions are available, the server connects to the session
+#' whose working directory matches its own; clients launched inside a project,
+#' as with Claude Code or Posit Assistant, thus connect to that project's
+#' session. Failing that, the server connects to the only running session, if
+#' there is exactly one. When several sessions are running and none matches,
+#' tools execute in the server's own R process until the client selects a
+#' session with the `select_r_session` tool.
+#'
 #' On Windows, you may need to configure the full path to the Rscript executable.
 #' Examples for Claude Code on WSL and Claude Desktop on Windows are shown
 #' at <https://github.com/posit-dev/mcptools/issues/41#issuecomment-3036617046>.
@@ -174,6 +188,10 @@ mcp_server <- function(
   check_not_interactive()
   type <- rlang::arg_match(type)
 
+  if (isTRUE(session_tools)) {
+    ensure_socket_dir(socket_dir_in_use())
+  }
+
   nanonext::reap(the$session_socket) # in case session was started in .Rprofile
   the$sessions_enabled <- isTRUE(session_tools)
   set_server_tools(tools, session_tools = the$sessions_enabled)
@@ -194,9 +212,10 @@ mcp_server_stdio <- function() {
   client <- nanonext::recv_aio(reader_socket, mode = "string", cv = cv)
 
   if (the$sessions_enabled) {
+    # no dial here: the server connects to a session lazily, at tool-call
+    # time (see ensure_session_connection())
     the$server_socket <- nanonext::socket("poly")
     on.exit(nanonext::reap(the$server_socket), add = TRUE)
-    nanonext::dial(the$server_socket, url = sprintf("%s%d", the$socket_url, 1L))
   }
 
   while (nanonext::wait(cv)) {
@@ -211,7 +230,6 @@ mcp_server_http <- function(host = "127.0.0.1", port = 8080) {
   if (the$sessions_enabled) {
     the$server_socket <- nanonext::socket("poly")
     on.exit(nanonext::reap(the$server_socket), add = TRUE)
-    nanonext::dial(the$server_socket, url = sprintf("%s%d", the$socket_url, 1L))
   }
 
   app <- list(
@@ -428,11 +446,16 @@ handle_http_request_message <- function(
     ))
   } else if (data$method == "tools/call") {
     data$protocolVersion <- protocol_version
+    # Mark the call as network-facing so server-side URL fetches (e.g. inlining a
+    # tool's `content_image_url()`) refuse internal addresses; the flag rides the
+    # message to whichever process runs the tool. Set server-side, so a client
+    # cannot clear it. stdio leaves it unset (fetches its own machine freely).
+    data$restrictFetch <- TRUE
     tool_name <- data$params$name
     if (
       !the$sessions_enabled ||
         tool_name %in% c("list_r_sessions", "select_r_session") ||
-        !nanonext::stat(the$server_socket, "pipes")
+        !ensure_session_connection()
     ) {
       prepared <- append_tool_fn(data)
       if (inherits(prepared, "jsonrpc_error")) {
@@ -512,9 +535,9 @@ handle_message_from_client <- function(line) {
         # two tools provided by mcptools itself which must be executed in
         # the server rather than a session (#18)
         tool_name %in% c("list_r_sessions", "select_r_session") ||
-        # when session handling is disabled, never forward to sessions
-        # with no sessions available, just execute tools in the server (#36)
-        !nanonext::stat(the$server_socket, "pipes")
+        # when no session is connected or discoverable, just execute tools
+        # in the server (#36)
+        !ensure_session_connection()
     ) {
       handle_request(data)
     } else {
@@ -559,8 +582,8 @@ forward_request <- function(data) {
   timeout <- session_response_timeout()
   send_result <- nanonext::send(
     the$server_socket,
-    prepared,
-    mode = "serial",
+    mac_seal(serialize(prepared, NULL)),
+    mode = "raw",
     block = timeout
   )
 
@@ -580,11 +603,11 @@ receive_forwarded_response <- function(id, timeout) {
   repeat {
     response_raw <- nanonext::recv(
       the$server_socket,
-      mode = "character",
+      mode = "raw",
       block = remaining_timeout(deadline)
     )
 
-    if (!is.character(response_raw) || nanonext::is_error_value(response_raw)) {
+    if (!is.raw(response_raw) || nanonext::is_error_value(response_raw)) {
       return(session_forwarding_error(
         id,
         sprintf(
@@ -594,8 +617,14 @@ receive_forwarded_response <- function(id, timeout) {
       ))
     }
 
+    payload <- mac_open(response_raw)
+    if (is.null(payload)) {
+      logcat("Ignoring unauthenticated forwarded response")
+      next
+    }
+
     response <- tryCatch(
-      jsonlite::parse_json(response_raw),
+      jsonlite::parse_json(rawToChar(payload)),
       error = function(err) {
         session_forwarding_error(
           id,
@@ -629,15 +658,15 @@ drain_stale_forwarded_responses <- function() {
   repeat {
     response_raw <- nanonext::recv(
       the$server_socket,
-      mode = "character",
+      mode = "raw",
       block = FALSE
     )
 
-    if (!is.character(response_raw) || nanonext::is_error_value(response_raw)) {
+    if (!is.raw(response_raw) || nanonext::is_error_value(response_raw)) {
       return(invisible())
     }
 
-    logcat(c("Ignoring queued stale forwarded response: ", response_raw))
+    logcat("Ignoring queued stale forwarded response")
   }
 }
 

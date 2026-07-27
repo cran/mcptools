@@ -53,9 +53,22 @@ test_that("HTTP config rejects Authorization header alongside OAuth", {
   )
 })
 
+test_that("an Authorization header without an oauth block builds and disables OAuth", {
+  transport <- mcp_transport_http(list(
+    url = "https://example.test/mcp",
+    headers = list(Authorization = "Key secret")
+  ))
+
+  expect_equal(transport$headers[["Authorization"]], "Key secret")
+  expect_false(mcp_oauth_active(transport))
+})
+
 test_that("credentialed public HTTP endpoints require explicit opt-out", {
-  transport <- mcp_transport_http(list(url = "http://example.test/mcp"))
-  expect_false(transport$allow_http)
+  # a bare http url is credentialed now that OAuth auto-engages on a 401
+  expect_error(
+    mcp_transport_http(list(url = "http://example.test/mcp")),
+    "Credentialed remote MCP endpoints"
+  )
 
   transport <- mcp_transport_http(list(
     url = "http://127.0.0.1:8080/mcp",
@@ -125,6 +138,112 @@ test_that("HTTP request construction leaves proxy and CA settings to curl", {
   expect_equal(req$method, "POST")
   expect_null(req$options$proxy)
   expect_null(req$options$cainfo)
+})
+
+test_that("credentialed redirects are followed only within the same origin", {
+  req <- mcp_transport_http_request(
+    mcp_transport_http(list(
+      url = "https://example.test/mcp",
+      headers = list("X-Api-Key" = "secret")
+    )),
+    list(jsonrpc = "2.0", id = 1L, method = "tools/list")
+  )
+  origin <- url_origin(req$url)
+
+  expect_equal(
+    mcp_redirect_hop(req, "/mcp/v2", origin)$url,
+    "https://example.test/mcp/v2"
+  )
+
+  for (location in c(
+    "https://evil.test/mcp",
+    "http://example.test/mcp",
+    "https://example.test:8443/mcp"
+  )) {
+    expect_error(
+      mcp_redirect_hop(req, location, origin),
+      class = "mcptools_http_cross_origin_redirect"
+    )
+  }
+
+  expect_error(mcp_redirect_hop(req, NULL, origin), "without a")
+})
+
+test_that("a cross-origin redirect refuses to resend credentialed headers", {
+  transport <- mcp_transport_http(list(
+    url = "https://example.test/mcp",
+    headers = list("X-Api-Key" = "secret")
+  ))
+
+  seen <- new.env(parent = emptyenv())
+  seen$urls <- character()
+
+  httr2::local_mocked_responses(function(req) {
+    seen$urls <- c(seen$urls, req$url)
+    httr2::response(
+      status_code = 307L,
+      url = req$url,
+      method = req$method,
+      headers = list(Location = "https://evil.test/mcp")
+    )
+  })
+
+  expect_error(
+    mcp_transport_request(
+      transport,
+      list(jsonrpc = "2.0", id = 1L, method = "tools/list")
+    ),
+    class = "mcptools_http_cross_origin_redirect"
+  )
+  expect_equal(seen$urls, "https://example.test/mcp")
+})
+
+test_that("a same-origin redirect follows and resends credentialed headers", {
+  transport <- mcp_transport_http(list(
+    url = "https://example.test/mcp",
+    headers = list("X-Api-Key" = "secret")
+  ))
+
+  seen <- new.env(parent = emptyenv())
+  seen$urls <- character()
+  seen$keys <- character()
+
+  httr2::local_mocked_responses(function(req) {
+    seen$urls <- c(seen$urls, req$url)
+    seen$keys <- c(seen$keys, req$headers[["X-Api-Key"]] %||% NA_character_)
+
+    if (grepl("/mcp/v2$", req$url)) {
+      return(httr2::response(
+        status_code = 200L,
+        url = req$url,
+        method = req$method,
+        headers = list("Content-Type" = "application/json"),
+        body = charToRaw(to_json(jsonrpc_response(
+          req$body$data$id,
+          result = list(tools = list())
+        )))
+      ))
+    }
+
+    httr2::response(
+      status_code = 308L,
+      url = req$url,
+      method = req$method,
+      headers = list(Location = "/mcp/v2")
+    )
+  })
+
+  result <- mcp_transport_request(
+    transport,
+    list(jsonrpc = "2.0", id = 1L, method = "tools/list")
+  )
+
+  expect_equal(
+    seen$urls,
+    c("https://example.test/mcp", "https://example.test/mcp/v2")
+  )
+  expect_equal(seen$keys, c("secret", "secret"))
+  expect_equal(result$result$tools, list())
 })
 
 test_that("HTTP OAuth resource defaults to the server URL and normalizes", {
@@ -297,6 +416,66 @@ test_that("Streamable HTTP JSON responses must match the request id", {
     mcp_transport_request(transport, mcp_request_tools_list(id = 2L)),
     "unexpected request id"
   )
+})
+
+test_that("tools/list pagination is capped and warns referencing the envvar", {
+  withr::local_envvar(MCPTOOLS_TOOLS_LIST_MAX_PAGES = "3")
+
+  transport <- mcp_transport_http(list(url = "https://example.test/mcp"))
+  transport$protocol_version <- latest_protocol_version
+
+  pages <- 0L
+  httr2::local_mocked_responses(function(req) {
+    message <- req$body$data
+    pages <<- pages + 1L
+    httr2::response(
+      status_code = 200L,
+      url = req$url,
+      method = req$method,
+      headers = list("Content-Type" = "application/json"),
+      body = charToRaw(to_json(jsonrpc_response(
+        message$id,
+        result = list(
+          tools = list(list(name = paste0("tool", pages))),
+          nextCursor = paste0("cursor", pages)
+        )
+      )))
+    )
+  })
+
+  expect_warning(
+    result <- mcp_request_tools_list_all(transport, id = 2L),
+    "MCPTOOLS_TOOLS_LIST_MAX_PAGES"
+  )
+  expect_equal(pages, 3L)
+  expect_length(result$response$result$tools, 3L)
+})
+
+test_that("tools/list server error messages are surfaced literally, never evaluated", {
+  withr::local_envvar(MCPTOOLS_INJECTION_CANARY = NA)
+  payload <- "{Sys.setenv(MCPTOOLS_INJECTION_CANARY = 'pwned')}"
+
+  transport <- mcp_transport_http(list(url = "https://example.test/mcp"))
+  transport$protocol_version <- latest_protocol_version
+
+  httr2::local_mocked_responses(function(req) {
+    message <- req$body$data
+    httr2::response(
+      status_code = 200L,
+      url = req$url,
+      method = req$method,
+      headers = list("Content-Type" = "application/json"),
+      body = charToRaw(to_json(jsonrpc_response(
+        message$id,
+        error = list(code = -32000, message = payload)
+      )))
+    )
+  })
+
+  err <- expect_error(mcp_request_tools_list_all(transport, id = 2L))
+
+  expect_identical(Sys.getenv("MCPTOOLS_INJECTION_CANARY"), "")
+  expect_match(conditionMessage(err), "{Sys.setenv", fixed = TRUE)
 })
 
 test_that("HTTP requests transparently reinitialize after a session 404", {
