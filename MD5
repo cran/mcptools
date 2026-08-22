@@ -1,7 +1,7 @@
-b8554096be71969d43a036014bf8a703 *DESCRIPTION
+af0b93fa4a4f308ffd153a352fd3a1ae *DESCRIPTION
 0d37e729582c25a6fc726cf9f8763140 *LICENSE
 f723bbd65f23a281d351b293866601f8 *NAMESPACE
-09327b1190e12f5cb06616d02e47a22c *NEWS.md
+e0d7a79f480c4655336d1294d10c56e1 *NEWS.md
 e9000c75364a3411ce663d5a864ccca4 *R/aaa.R
 78ee86e47c221fa9fa5924a234c92232 *R/client-auth.R
 0649a7d0ffc0556164315a21f89e4693 *R/client-http.R
@@ -45,7 +45,7 @@ c93d5b91435ec4eedea0f25a26383b56 *tests/testthat/test-connect.R
 f2d7c36ebb2b1fb42c03c7aa574d261d *tests/testthat/test-server.R
 0c6c488e5e9c378ee65c02d85f638c88 *tests/testthat/test-session.R
 d1b8970c8bb6993e246cb7e7763f3442 *tests/testthat/test-socket-auth.R
-848b14dbd16044f1d5ac9520536db1f1 *tests/testthat/test-socket-dir.R
+b33314faf4835c6d080ead27f8519903 *tests/testthat/test-socket-dir.R
 fc55b643da9be640a1c4db35b4ae6bb0 *tests/testthat/test-tools.R
 3a7e132f78885279e6d7257f8b1812a7 *tests/testthat/test-utils.R
 0dec3072f39aed31753aa693e8923173 *vignettes/server.Rmd

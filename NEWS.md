@@ -1,3 +1,7 @@
+# mcptools 1.0.2
+
+Only an internal testing change that addresses a temp directory cleanup NOTE.
+
 # mcptools 1.0.1
 
 This release includes several security-oriented fixes, in addition to a couple
